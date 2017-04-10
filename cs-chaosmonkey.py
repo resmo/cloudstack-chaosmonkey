@@ -3,32 +3,41 @@
 #
 # (c) 2016, René Moser <mail@renemoser.net>
 #
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
+# CloudStack Chaosmonkey is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# Ansible is distributed in the hope that it will be useful,
+# CloudStack Chaosmonkey is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with Ansible. If not, see <http://www.gnu.org/licenses/>.
+# along with CloudStack Chaosmonkey. If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import print_function
 import sys
 import argparse
 import random
 import time
+import os
 
 try:
     from cs import CloudStack, CloudStackException, read_config
 except ImportError as e:
     sys.stderr.write("pip install cs: %s" % str(e))
     sys.exit(1)
+
+
+CHAOS_ACTIONS = [
+    'reboot',
+    'stop',
+    'stop-wait-start',
+    'no-action',
+    'ask-monkey'
+]
+
 
 class CloudStackChaosMonkey(object):
 
@@ -57,13 +66,13 @@ class CloudStackChaosMonkey(object):
             sys.exit(1)
 
         instances_not_running = 0
-        for instance in instances.get('virtualmachine', []):
+        for instance in instances.get('virtualmachine') or []:
             if instance['state'].lower() != "running":
                 instances_not_running += 1
                 if instances_not_running > self.max_not_running:
                     print ("max-not-running reached: %s > %s. Avoiding too much chaos." % (instances_not_running, self.max_not_running))
                     sys.exit(0)
-        return instances.get('virtualmachine', [])
+        return instances.get('virtualmachine') or []
 
     def get_instance_groups(self):
         if not self.group:
@@ -76,7 +85,7 @@ class CloudStackChaosMonkey(object):
 
     def make_chaos(self):
         instances = self.get_instances()
-        random_number = random.randint(0, len(instances)-1)
+        random_number = random.randint(0, len(instances) - 1)
         instance = instances[random_number]
         if instance['state'].lower() != "running":
             return
@@ -96,14 +105,14 @@ class CloudStackChaosMonkey(object):
             res = self.cs.stopVirtualMachine(id=instance['id'])
             instance = self.poll_job(res, 'virtualmachine')
             random_number = random.randint(self.min_wait, self.max_wait)
-            print("Wating %s" % random_number )
+            print("Wating %s" % random_number)
             time.sleep(random_number)
             res = self.cs.startVirtualMachine(id=instance['id'])
             instance = self.poll_job(res, 'virtualmachine')
 
     def find_action(self):
         if self.chaos_action not in self.actions:
-            random_number = random.randint(0, len(self.actions)-1)
+            random_number = random.randint(0, len(self.actions) - 1)
             return self.actions[random_number]
         else:
             return self.chaos_action
@@ -124,22 +133,31 @@ class CloudStackChaosMonkey(object):
                 time.sleep(2)
         return job
 
+
 def main():
     try:
         parser = argparse.ArgumentParser()
-        parser.add_argument('--group', help="Name of instances group, default: None")
-        parser.add_argument('--max-not-running', type=int, default=0, help="Max allowed VM not running, default: 0")
-        parser.add_argument('--chaos-action', choices=['reboot', 'stop', 'stop-wait-start', 'no-action', 'ask-monkey'], default='ask-monkey', help="Monkey action, default: ask-monkey")
-        parser.add_argument('--min-wait', type=int, default=10, help="Wait at least some time in seconds, default: 10")
-        parser.add_argument('--max-wait', type=int, default=300, help="Wait at most some time in seconds, default: 300")
+        parser.add_argument('--group', default=os.getenv('CHAOSMONKEY_GROUP'), help="Name of instances group, default: None")
+        parser.add_argument('--max-not-running', type=int, default=os.getenv('CHAOSMONKEY_MAX_NOT_RUNNING', 0), help="Max allowed VM not running, default: 0")
+        parser.add_argument('--chaos-action', choices=CHAOS_ACTIONS, default=os.getenv('CHAOSMONKEY_CHAOS_ACTION', 'ask-monkey'),
+                            help="Monkey action, default: ask-monkey")
+        parser.add_argument('--min-wait', type=int, default=os.getenv('CHAOSMONKEY_MIN_WAIT', 10), help="Wait at least some time in seconds, default: 10")
+        parser.add_argument('--max-wait', type=int, default=os.getenv('CHAOSMONKEY_MAX_WAIT', 300), help="Wait at most some time in seconds, default: 300")
         args = parser.parse_args()
 
-        monkey = CloudStackChaosMonkey(max_not_running=args.max_not_running, group=args.group, chaos_action=args.chaos_action, min_wait=args.min_wait, max_wait=args.max_wait)
+        monkey = CloudStackChaosMonkey(
+            max_not_running=args.max_not_running,
+            group=args.group,
+            chaos_action=args.chaos_action,
+            min_wait=args.min_wait,
+            max_wait=args.max_wait
+        )
         monkey.make_chaos()
 
     except CloudStackException as e:
         sys.stderr.write("CloudStackException: %s" % str(e))
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
